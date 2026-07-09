@@ -29,6 +29,9 @@ public:
 
 	const virusLib::ROMFile& getRom() const { return m_rom; }
 
+	// analysis helper: mutate the currently loaded single before run()
+	virusLib::ROMFile::TPreset& editPreset() { return m_preset; }
+
 private:
 
 	void bootDSP(bool _createDebugger) const;
