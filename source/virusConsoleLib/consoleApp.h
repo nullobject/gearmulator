@@ -32,6 +32,15 @@ public:
 	// analysis helper: mutate the currently loaded single before run()
 	virusLib::ROMFile::TPreset& editPreset() { return m_preset; }
 
+	// analysis helper: dump DSP X/Y memory to <prefix>_X.txt / _Y.txt at end of run()
+	void setMemDumpPrefix(std::string _p) { m_memDumpPrefix = std::move(_p); }
+
+	// analysis helper: route all DSP memory writes through C++ so they can be traced
+	void enableMemWriteTracing();
+	// analysis helper: record memory writes in [lo,hi) during sample window [start,end)
+	void setMemTraceWindow(uint32_t _lo, uint32_t _hi, uint32_t _start, uint32_t _end)
+	{ m_traceLo = _lo; m_traceHi = _hi; m_traceStart = _start; m_traceEnd = _end; }
+
 private:
 
 	void bootDSP(bool _createDebugger) const;
@@ -47,4 +56,7 @@ private:
 	std::unique_ptr<virusLib::DemoPlayback> m_demo;
 
 	virusLib::Microcontroller::TPreset m_preset;
+	std::string m_memDumpPrefix;
+
+	uint32_t m_traceLo = 0, m_traceHi = 0, m_traceStart = 0, m_traceEnd = 0;
 };

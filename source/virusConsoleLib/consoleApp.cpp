@@ -9,6 +9,9 @@
 #include "virusLib/demoplaybackTI.h"
 
 #include "dsp56kEmu/dsp.h"
+#include "dsp56kEmu/memtrace.h"
+
+#include "virusLib/dspSingle.h"
 
 namespace virusLib
 {
@@ -70,6 +73,15 @@ void ConsoleApp::waitReturn()
 void ConsoleApp::bootDSP(const bool _createDebugger) const
 {
 	virusLib::Device::bootDSPs(m_dsp1.get(), m_dsp2, m_rom, _createDebugger);
+}
+
+void ConsoleApp::enableMemWriteTracing()
+{
+	// route every DSP memory write through callDSPMemWrite() so memtrace can see it
+	auto& jit = m_dsp1->getJIT();
+	auto cfg = jit.getConfig();
+	cfg.memoryWritesCallCpp = true;
+	jit.setConfig(cfg);
 }
 
 dsp56k::IPeripherals& ConsoleApp::getYPeripherals() const
@@ -277,11 +289,39 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 
 	AudioProcessor proc(m_rom.getSamplerate(), _audioOutputFilename, m_demo != nullptr, _maxSampleCount, m_dsp1.get(), m_dsp2);
 
+	uint32_t samplesDone = 0;
+	bool traceStarted = false, traceStopped = false;
+	const bool tracing = m_traceEnd > m_traceStart;
+
 	while(!proc.finished())
 	{
 		sem.wait();
 		proc.processBlock(blockSize);
 		midiEvents.clear();
+
+		if(tracing)
+		{
+			samplesDone += blockSize;
+			if(!traceStarted && samplesDone >= m_traceStart)
+			{
+				dsp56k::memTraceBegin(m_traceLo, m_traceHi);
+				traceStarted = true;
+			}
+			else if(traceStarted && !traceStopped && samplesDone >= m_traceEnd)
+			{
+				dsp56k::memTraceEnd();
+				traceStopped = true;
+			}
+		}
+	}
+	if(tracing)
+		dsp56k::memTraceEnd();
+
+	if(!m_memDumpPrefix.empty())
+	{
+		auto& mem = m_dsp1->getMemory();
+		mem.saveAsText((m_memDumpPrefix + "_X.txt").c_str(), dsp56k::MemArea_X, 0, mem.sizeXY());
+		mem.saveAsText((m_memDumpPrefix + "_Y.txt").c_str(), dsp56k::MemArea_Y, 0, mem.sizeXY());
 	}
 
 	m_dsp1.reset();
