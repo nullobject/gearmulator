@@ -244,14 +244,15 @@ int main(int argc,char* argv[]){
 		buildReverbPatch(app.editPreset(), c);
 		if(silent) P(app.editPreset(), A, 37, 0); // no noise -> pure silence (map buffers)
 		app.enableMemWriteTracing();
-		// note-on ~2048 frames; trace the delay-buffer region right after it
-		app.setMemTraceWindow(0x44000, 0x4e000, silent?6000:2100, silent?11000:5200);
-		app.run("/tmp/vtrace.wav", 12000, 64, false, false);
+		// note-on ~2048 frames; burst decays fast, so a short window well into the
+		// tail captures the free-response (pure feedback) reads+writes for the matrix
+		app.setMemTraceWindow(0x44000, 0x4e000, silent?6000:3500, silent?11000:3560);
+		app.run("/tmp/vtrace.wav", silent?12000:3700, 64, false, false);
 
 		const auto& tr = dsp56k::memTraceData();
 		char fn[128]; snprintf(fn,sizeof(fn),"/tmp/vtrace_%d%s.txt",type,silent?"_sil":"");
 		FILE* f=fopen(fn,"w");
-		for(const auto& e : tr) fprintf(f,"%u %06x %06x\n", e.area, e.addr, e.value);
+		for(const auto& e : tr) fprintf(f,"%c %u %06x %06x\n", e.write?'W':'R', e.area, e.addr, e.value);
 		fclose(f);
 		fprintf(stderr,"wrote %zu trace entries to %s\n", tr.size(), fn);
 		return 0;

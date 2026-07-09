@@ -77,11 +77,9 @@ void ConsoleApp::bootDSP(const bool _createDebugger) const
 
 void ConsoleApp::enableMemWriteTracing()
 {
-	// route every DSP memory write through callDSPMemWrite() so memtrace can see it
-	auto& jit = m_dsp1->getJIT();
-	auto cfg = jit.getConfig();
-	cfg.memoryWritesCallCpp = true;
-	jit.setConfig(cfg);
+	// deferred: the call-path config is applied after boot (see run()) so boot
+	// stays fast and only the audio-path JIT blocks route reads/writes through C++
+	m_memTraceEnabled = true;
 }
 
 dsp56k::IPeripherals& ConsoleApp::getYPeripherals() const
@@ -275,6 +273,16 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 	});
 
 	bootDSP(_createDebugger);
+
+	if(m_memTraceEnabled)
+	{
+		// enable after boot so boot code stays fast; audio-path blocks compile now with the call path
+		auto& jit = m_dsp1->getJIT();
+		auto cfg = jit.getConfig();
+		cfg.memoryWritesCallCpp = true;
+		cfg.memoryReadsCallCpp = true;
+		jit.setConfig(cfg);
+	}
 
 	if(_dumpAssembler)
 	{

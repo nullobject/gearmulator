@@ -58,5 +58,6 @@ private:
 	virusLib::Microcontroller::TPreset m_preset;
 	std::string m_memDumpPrefix;
 
+	bool m_memTraceEnabled = false;
 	uint32_t m_traceLo = 0, m_traceHi = 0, m_traceStart = 0, m_traceEnd = 0;
 };
