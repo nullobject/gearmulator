@@ -252,7 +252,7 @@ int main(int argc,char* argv[]){
 		const auto& tr = dsp56k::memTraceData();
 		char fn[128]; snprintf(fn,sizeof(fn),"/tmp/vtrace_%d%s.txt",type,silent?"_sil":"");
 		FILE* f=fopen(fn,"w");
-		for(const auto& e : tr) fprintf(f,"%c %u %06x %06x\n", e.write?'W':'R', e.area, e.addr, e.value);
+		for(const auto& e : tr) fprintf(f,"%c %u %06x %06x %06x\n", e.write?'W':'R', e.area, e.addr, e.value, e.pc);
 		fclose(f);
 		fprintf(stderr,"wrote %zu trace entries to %s\n", tr.size(), fn);
 		return 0;
