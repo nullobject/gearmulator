@@ -212,7 +212,15 @@ void ConsoleApp::audioCallback(const uint32_t _audioCallbackCount)
 		if(!m_demo)
 		{
 			LOG("Sending Note On");
-			m_uc->sendMIDI(SMidiEvent(MidiEventSource::Host, 0x90, 60, 0x5f));		// Note On
+			if(m_notes.empty())
+			{
+				m_uc->sendMIDI(SMidiEvent(MidiEventSource::Host, 0x90, 60, 0x5f));		// Note On
+			}
+			else
+			{
+				for (const auto note : m_notes)
+					m_uc->sendMIDI(SMidiEvent(MidiEventSource::Host, 0x90, note, 0x5f));
+			}
 			m_uc->sendPendingMidiEvents(std::numeric_limits<uint32_t>::max());
 		}
 		break;
@@ -272,7 +280,25 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 		}
 	});
 
+	if(m_fetchProfile)
+		dsp56k::fetchProfileEnable(m_dsp1->getMemory().sizeP());
+
+	if(m_fullMemTrace)
+	{
+		auto& jit = m_dsp1->getJIT();
+		auto cfg = jit.getConfig();
+		cfg.memoryWritesCallCpp = true;
+		cfg.memoryReadsCallCpp = true;
+		jit.setConfig(cfg);
+	}
+
+	if(m_preBoot)
+		m_preBoot(m_dsp1->getMemory());
+
 	bootDSP(_createDebugger);
+
+	if(m_postBoot)
+		m_postBoot(m_dsp1->getMemory());
 
 	if(m_memTraceEnabled)
 	{
@@ -313,6 +339,10 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 			if(!traceStarted && samplesDone >= m_traceStart)
 			{
 				dsp56k::memTraceBegin(m_traceLo, m_traceHi);
+				if(m_fetchProfile)
+					dsp56k::fetchProfileClear();
+				m_windowCycles = m_dsp1->getDSP().getCycles();
+				m_windowInstructions = m_dsp1->getDSP().getInstructionCounter();
 				traceStarted = true;
 			}
 			else if(traceStarted && !traceStopped && samplesDone >= m_traceEnd)
@@ -324,6 +354,12 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 	}
 	if(tracing)
 		dsp56k::memTraceEnd();
+
+	m_windowCycles = m_dsp1->getDSP().getCycles() - m_windowCycles;
+	m_windowInstructions = m_dsp1->getDSP().getInstructionCounter() - m_windowInstructions;
+
+	if(m_postRun)
+		m_postRun(m_dsp1->getMemory());
 
 	if(!m_memDumpPrefix.empty())
 	{
