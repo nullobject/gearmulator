@@ -57,7 +57,9 @@ public:
 
 	// analysis helper: notes played at the note-on point instead of the single
 	// middle C, so voice count can be swept
-	void setNotes(std::vector<uint8_t> _notes) { m_notes = std::move(_notes); }
+	// an empty list is meaningful: it means play nothing, which is the baseline
+	// that separates work from idle
+	void setNotes(std::vector<uint8_t> _notes) { m_notes = std::move(_notes); m_notesSet = true; }
 
 	// analysis helper: inspect DSP memory right after boot / right before teardown
 	using MemCallback = std::function<void(dsp56k::Memory&)>;
@@ -91,6 +93,7 @@ private:
 	bool m_fetchProfile = false;
 	uint64_t m_windowCycles = 0, m_windowInstructions = 0;
 	std::vector<uint8_t> m_notes;
+	bool m_notesSet = false;
 	MemCallback m_preBoot, m_postBoot, m_postRun;
 	uint32_t m_traceLo = 0, m_traceHi = 0, m_traceStart = 0, m_traceEnd = 0;
 };

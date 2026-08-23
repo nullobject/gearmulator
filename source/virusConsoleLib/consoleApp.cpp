@@ -212,7 +212,7 @@ void ConsoleApp::audioCallback(const uint32_t _audioCallbackCount)
 		if(!m_demo)
 		{
 			LOG("Sending Note On");
-			if(m_notes.empty())
+			if(!m_notesSet)
 			{
 				m_uc->sendMIDI(SMidiEvent(MidiEventSource::Host, 0x90, 60, 0x5f));		// Note On
 			}

@@ -159,7 +159,7 @@ namespace
 		return 0;
 	}
 
-	struct Blk { uint32_t pc, words; uint64_t count; };
+	struct Blk { uint32_t pc, words, instrs; uint64_t count; };
 
 	// 24-bit words expressed as ECP5 block RAM. A DP16KD holds 18432 bits; this
 	// is the perfect-packing floor, so the real cost is higher.
@@ -204,6 +204,7 @@ int main(int argc, char* argv[])
 
 	// distinct pitches: a repeated note-on retriggers the same voice rather than
 	// adding one, so the notes must not collide
+	// voices=0 renders silence: the baseline that separates real work from idle
 	std::vector<uint8_t> notes;
 	for(int i = 0; i < voices; ++i)
 		notes.push_back(static_cast<uint8_t>(36 + i));
@@ -319,12 +320,13 @@ int main(int argc, char* argv[])
 		{
 			const auto* counts = dsp56k::fetchProfileCounts();
 			const auto* sizes  = dsp56k::fetchProfileSizes();
+			const auto* instrs = dsp56k::fetchProfileInstrs();
 			for(uint32_t pc = 0; pc < dsp56k::fetchProfileSize() && pc < g_maxWords; ++pc)
 			{
 				if(!counts[pc])
 					continue;
 				const auto w = sizes[pc];
-				blocks.push_back({pc, w, counts[pc]});
+				blocks.push_back({pc, w, instrs[pc], counts[pc]});
 				(pc >= g_bridge ? fetchExt : fetchInt) += counts[pc] * w;
 				for(uint32_t i = 0; i < w && pc + i < g_maxWords; ++i)
 					codeSeen[pc + i] = 1;
@@ -334,14 +336,27 @@ int main(int argc, char* argv[])
 		for(uint32_t a = 0; a < g_maxWords; ++a)
 			if(codeSeen[a]) (a >= g_bridge ? codeExt : codeInt)++;
 
+		uint64_t blockInstrs = 0;
+		for(const auto& b : blocks)
+			blockInstrs += b.count * b.instrs;
+
 		const auto fetchTotal = fetchInt + fetchExt;
 		if(fetchTotal)
 		{
 			printf("\n# instruction fetch (block executions x block length, %u frames after note-on)\n", window);
-			printf("  DSP retired %.1f instructions and %.1f cycles per frame - fetch words must not\n"
-			       "  exceed cycles, since the DSP56300 fetches at most one P word per cycle\n",
+			printf("  DSP retired %.1f instructions and %.1f cycles per frame (both include idle)\n",
 				static_cast<double>(app.getWindowInstructions()) / window,
 				static_cast<double>(app.getWindowCycles()) / window);
+			// The same block entries also carry the pacing counter, so summing them
+			// must reproduce it. A shortfall is idle: DSP::op_Wait fast-forwards
+			// both m_instructions and m_cycles to the next peripheral event, so
+			// neither counter is a measure of work - a WAIT-heavy firmware inflates
+			// both while fetching nothing. This percentage is the real duty cycle.
+			printf("  block entries account for %.1f instructions/frame - a duty cycle of %.1f%%.\n"
+			       "  The remainder is WAIT: op_Wait fast-forwards both counters to the next\n"
+			       "  peripheral event, so retired instructions and cycles both include idle.\n",
+				static_cast<double>(blockInstrs) / window,
+				100.0 * static_cast<double>(blockInstrs) / static_cast<double>(app.getWindowInstructions()));
 			if(const auto bad = dsp56k::fetchProfileUnencodable())
 				printf("# WARNING: %u blocks could not be counted (counter out of reach of the JIT's\n"
 				       "#          base register), so the totals below are an undercount\n", bad);
