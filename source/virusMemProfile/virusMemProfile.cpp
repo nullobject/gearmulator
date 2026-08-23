@@ -285,6 +285,64 @@ int main(int argc, char* argv[])
 					periphNames[area * 0x1000000 + sym.first] = sym.second;
 			}
 		}
+
+		// Port A configuration, read back from the peripheral block after the run.
+		//
+		// This is the firmware telling us the board's memory map in its own words.
+		// AAR[0-3] each define one external bank: BAC/BNC give its base and size,
+		// and BPEN/BXEN/BYEN say which of P, X and Y decode into it. If one bank
+		// has all three set, X, Y and P alias externally; if they are split across
+		// banks, they do not. Everything below the chip's internal memory top never
+		// reaches Port A at all and is not described here.
+		if(auto* px = _dsp.getPeriph(dsp56k::MemArea_X))
+		{
+			static const char* const s_bat[] = { "reserved", "SRAM", "DRAM", "reserved" };
+			static const struct { uint32_t addr; const char* name; bool isAar; } s_portA[] = {
+				{ 0xFFFFFB, "BCR ", false },
+				{ 0xFFFFFA, "DCR ", false },
+				{ 0xFFFFF9, "AAR0", true  },
+				{ 0xFFFFF8, "AAR1", true  },
+				{ 0xFFFFF7, "AAR2", true  },
+				{ 0xFFFFF6, "AAR3", true  },
+			};
+
+			printf("\n# --- Port A configuration (read back after run) ---\n");
+			for(const auto& r : s_portA)
+			{
+				const auto v = px->read(r.addr, dsp56k::Invalid);
+				printf("%s x:$%06x = $%06x", r.name, r.addr, v);
+
+				if(!r.isAar)
+				{
+					printf("\n");
+					continue;
+				}
+				if(v == 0)
+				{
+					printf("   (disabled)\n");
+					continue;
+				}
+
+				const uint32_t bnc  = (v >> 8) & 0xf;
+				const uint32_t base = ((v >> 12) & 0xfff) << 12;
+
+				printf("   P=%u X=%u Y=%u  %s  BAAP=%u BAM=%u BPAC=%u\n",
+					(v >> 3) & 1, (v >> 4) & 1, (v >> 5) & 1,
+					s_bat[v & 3], (v >> 2) & 1, (v >> 6) & 1, (v >> 7) & 1);
+
+				if(bnc == 0)
+				{
+					printf("                       whole 16M space above internal memory\n");
+				}
+				else
+				{
+					const uint32_t size = 1u << (24 - bnc);
+					printf("                       $%06x-$%06x  (%u words, BNC=%u)\n",
+						base, base + size - 1, size, bnc);
+				}
+			}
+			fflush(stdout);
+		}
 	});
 	app.setPostBootCallback([&](dsp56k::Memory& _m) { bootSnap = snapshot(_m); });
 	app.setPostRunCallback ([&](dsp56k::Memory& _m) { runSnap  = snapshot(_m); });
@@ -308,7 +366,23 @@ int main(int argc, char* argv[])
 	// ---- report -----------------------------------------------------------
 	if(!doPoison)
 		printf("\n# NOTE: poison disabled - counts below are non-zero words, not written words\n");
-	printf("\n# write footprint (words differing from the fill pattern)\n");
+	// poison=0 is the control run that proves the fill is inert, NOT a
+	// measurement. With no fill, snapshot() compares against zero, so every
+	// word the firmware legitimately writes as zero counts as untouched and
+	// the footprint comes out low - by ~45,000 words on Virus B. The Phase 0
+	// numbers were once taken this way and had to be re-measured, so say so
+	// loudly rather than printing a table that looks like the real thing.
+	if(!g_poisoned)
+	{
+		printf("\n# !! poison=0: THESE NUMBERS ARE NOT A FOOTPRINT MEASUREMENT !!\n");
+		printf("#    Without the fill the comparison basis is zero, so every word\n");
+		printf("#    written as zero is counted as untouched. Use this mode only to\n");
+		printf("#    diff the .wav against a poison=1 run. Re-run with poison=1 for\n");
+		printf("#    any number you intend to cite.\n");
+	}
+
+	printf("\n# write footprint (words differing from the %s)\n",
+		g_poisoned ? "fill pattern" : "zero basis - SEE WARNING ABOVE");
 	printf("# %-16s %8s %10s %10s %10s   %s\n", "bank", "words", "at boot", "after run", "added", "high water");
 	uint64_t totalWritten = 0;
 	for(int b = 0; b < BANK_COUNT; ++b)
