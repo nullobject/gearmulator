@@ -54,6 +54,12 @@ public:
 	// peripheral register access. Both are armed before boot for the same reason
 	// as fetch profiling, and both are reset when the trace window opens.
 	void enableOpcodeProfiling() { m_opcodeProfile = true; }
+
+	// analysis helper: switch the JIT into lockstep mode when the trace window
+	// opens - one instruction per block, no block linking - and throw away every
+	// block compiled so far so they are re-emitted with the per-instruction hook.
+	// Boot therefore still runs at full speed; only the traced window is slow.
+	void enableInstTrace() { m_instTrace = true; }
 	void enablePeriphProfiling() { m_periphProfile = true; }
 
 	// analysis helper: DSP cycles and instructions retired inside the trace window,
@@ -103,6 +109,7 @@ private:
 	bool m_fullMemTrace = false;
 	bool m_fetchProfile = false;
 	bool m_opcodeProfile = false;
+	bool m_instTrace = false;
 	bool m_periphProfile = false;
 	uint64_t m_windowCycles = 0, m_windowInstructions = 0;
 	std::vector<uint8_t> m_notes;

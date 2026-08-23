@@ -349,6 +349,20 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 					dsp56k::fetchProfileClear();
 				if(m_periphProfile)
 					dsp56k::periphProfileMark();	// everything so far was boot
+
+				if(m_instTrace)
+				{
+					dsp56k::instTraceArm(true);
+					auto& jit = m_dsp1->getJIT();
+					auto cfg = jit.getConfig();
+					cfg.maxInstructionsPerBlock = 1;
+					cfg.linkJitBlocks = false;
+					cfg.maxDoIterations = 1;
+					cfg.memoryWritesCallCpp = true;
+					cfg.memoryReadsCallCpp = true;
+					jit.setConfig(cfg);
+					jit.destroyAllBlocks();
+				}
 				m_windowCycles = m_dsp1->getDSP().getCycles();
 				m_windowInstructions = m_dsp1->getDSP().getInstructionCounter();
 				traceStarted = true;
