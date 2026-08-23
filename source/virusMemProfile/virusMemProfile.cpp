@@ -34,9 +34,16 @@
 #include <string>
 #include <vector>
 
+#include <map>
+#include <string>
+
 #include "virusConsoleLib/consoleApp.h"
+#include "dsp56kEmu/disasm.h"
+#include "dsp56kEmu/dsp.h"
 #include "dsp56kEmu/memory.h"
 #include "dsp56kEmu/memtrace.h"
+#include "dsp56kEmu/opcodeinfo.h"
+#include "dsp56kEmu/opcodes.h"
 
 namespace
 {
@@ -161,6 +168,33 @@ namespace
 
 	struct Blk { uint32_t pc, words, instrs; uint64_t count; };
 
+	// "ADD S,D" -> "ADD". The build order wants mnemonics, not addressing modes.
+	//
+	// Parallel moves are the exception. Every one of them spells its assembly with
+	// a "(...)" placeholder where the ALU op would go, so the mnemonic is useless
+	// as a label - they would all collapse into one bucket. For those, name the
+	// addressing mode instead, which is the thing that costs hardware: whether it
+	// is a register move, one memory port, or both X and Y at once.
+	std::string mnemonic(const char* _assembly)
+	{
+		std::string a(_assembly ? _assembly : "?");
+
+		const std::string ph = "(...) ";
+		if(a.compare(0, ph.size(), ph) != 0)
+		{
+			const auto sp = a.find(' ');
+			return sp == std::string::npos ? a : a.substr(0, sp);
+		}
+
+		a = a.substr(ph.size());
+		const auto alt = a.find(" / ");			// keep only the first of the variants
+		if(alt != std::string::npos)
+			a = a.substr(0, alt);
+		if(a.size() > 20)
+			a = a.substr(0, 20);
+		return "move " + a;
+	}
+
 	// 24-bit words expressed as ECP5 block RAM. A DP16KD holds 18432 bits; this
 	// is the perfect-packing floor, so the real cost is higher.
 	double bramsFor(const uint64_t _words) { return static_cast<double>(_words) * 24.0 / 18432.0; }
@@ -221,12 +255,37 @@ int main(int argc, char* argv[])
 		dsp56k::memTraceSetSink(&traceSink);
 		app.enableFullMemTracing();
 		app.enableFetchProfiling();
+		app.enableOpcodeProfiling();
+		app.enablePeriphProfiling();
 		app.setMemTraceWindow(0, 0xffffffff, g_noteOnFrame, 0xfffffff0);
 	}
+
+	// peripheral register names depend on the model (56303 has ESSI, 56362 ESAI),
+	// so take them from the peripherals themselves rather than a hardcoded table
+	std::map<uint32_t, std::string> periphNames;
 
 	Snapshot bootSnap, runSnap;
 	if(doPoison)
 		app.setPreBootCallback([&](dsp56k::Memory& _m) { poison(_m); });
+	app.setPostRunDspCallback([&](dsp56k::DSP& _dsp)
+	{
+		const dsp56k::Opcodes opcodes;
+		dsp56k::Disassembler disasm(opcodes);
+		for(uint32_t area = 0; area < 2; ++area)
+		{
+			if(auto* p = _dsp.getPeriph(area))
+				p->setSymbols(disasm);
+		}
+		for(uint32_t area = 0; area < 2; ++area)
+		{
+			const auto type = area ? dsp56k::Disassembler::MemY : dsp56k::Disassembler::MemX;
+			for(const auto& sym : disasm.getSymbols(type))
+			{
+				if(sym.first >= 0xffff80 && sym.first <= 0xffffff && !sym.second.empty())
+					periphNames[area * 0x1000000 + sym.first] = sym.second;
+			}
+		}
+	});
 	app.setPostBootCallback([&](dsp56k::Memory& _m) { bootSnap = snapshot(_m); });
 	app.setPostRunCallback ([&](dsp56k::Memory& _m) { runSnap  = snapshot(_m); });
 
@@ -394,6 +453,98 @@ int main(int argc, char* argv[])
 				}
 			}
 
+			// ---- opcode histogram (Phase 0 item 3) -------------------------
+			if(dsp56k::opcodeProfileActive())
+			{
+				const dsp56k::Opcodes opcodes;
+				const auto* oWord = dsp56k::opcodeProfileWord();
+				const auto* oSize = dsp56k::opcodeProfileOpSize();
+				const auto* oPar  = dsp56k::opcodeProfileParallel();
+
+				// a DSP56300 word can encode an ALU op and a parallel move at once,
+				// so they are counted as the two separate pieces of hardware they are
+				std::map<std::string, uint64_t> byAlu, byMove;
+				std::map<uint32_t, uint64_t> byVariant;
+				uint64_t totalOps = 0, parallelOps = 0;
+
+				for(const auto& b : blocks)
+				{
+					for(uint32_t o = 0; o < b.words; )
+					{
+						const auto pc = b.pc + o;
+						if(pc >= g_maxWords || oSize[pc] == 0 || oWord[pc] == 0xffffffff)
+							break;
+
+						dsp56k::Instruction instA = dsp56k::Invalid, instB = dsp56k::Invalid;
+						opcodes.getInstructionTypes(oWord[pc], instA, instB);
+
+						if(instA != dsp56k::Invalid && instA < dsp56k::InstructionCount)
+						{
+							byAlu[mnemonic(dsp56k::g_opcodes[instA].m_assembly)] += b.count;
+							byVariant[instA] += b.count;
+						}
+						if(instB != dsp56k::Invalid && instB < dsp56k::InstructionCount)
+							byMove[mnemonic(dsp56k::g_opcodes[instB].m_assembly)] += b.count;
+
+						totalOps += b.count;
+						if(oPar[pc])
+							parallelOps += b.count;
+						o += oSize[pc];
+					}
+				}
+
+				if(totalOps)
+				{
+					auto rank = [](const std::map<std::string, uint64_t>& _m)
+					{
+						std::vector<std::pair<std::string, uint64_t>> v(_m.begin(), _m.end());
+						std::sort(v.begin(), v.end(),
+							[](const auto& _a, const auto& _b) { return _a.second > _b.second; });
+						return v;
+					};
+					auto table = [&](const char* _title, const std::vector<std::pair<std::string, uint64_t>>& _v)
+					{
+						printf("\n  # %s\n", _title);
+						printf("  # %-28s %14s %9s %9s\n", "mnemonic", "executions", "share", "cumul");
+						double cum = 0;
+						for(size_t i = 0; i < _v.size(); ++i)
+						{
+							const auto share = 100.0 * static_cast<double>(_v[i].second) / static_cast<double>(totalOps);
+							cum += share;
+							printf("  %2zu %-28s %14llu %8.2f%% %8.2f%%\n", i + 1, _v[i].first.c_str(),
+								static_cast<unsigned long long>(_v[i].second), share, cum);
+							if(cum > 99.5 && i > 20)
+								break;
+						}
+					};
+
+					const auto alu = rank(byAlu), mov = rank(byMove);
+					printf("\n# opcode histogram (Phase 0 item 3): %llu instructions executed per frame\n",
+						static_cast<unsigned long long>(totalOps / window));
+					printf("  %zu distinct ALU mnemonics, %zu move mnemonics, %zu distinct encodings\n",
+						alu.size(), mov.size(), byVariant.size());
+					printf("  %.1f%% of executed words carry a parallel move - the parallel move\n"
+					       "  datapath is not optional, and must retire with the ALU op\n",
+						100.0 * static_cast<double>(parallelOps) / static_cast<double>(totalOps));
+					table("ALU / control instructions", alu);
+					table("parallel move types", mov);
+
+					if(FILE* of = fopen((prefix + "_opcodes.txt").c_str(), "w"))
+					{
+						fprintf(of, "# executions mnemonic assembly\n");
+						std::vector<std::pair<uint32_t, uint64_t>> va(byVariant.begin(), byVariant.end());
+						std::sort(va.begin(), va.end(),
+							[](const auto& _a, const auto& _b) { return _a.second > _b.second; });
+						for(const auto& v : va)
+							fprintf(of, "%llu %s \"%s\"\n", static_cast<unsigned long long>(v.second),
+								mnemonic(dsp56k::g_opcodes[v.first].m_assembly).c_str(),
+								dsp56k::g_opcodes[v.first].m_assembly);
+						fclose(of);
+						printf("  wrote per-encoding histogram to %s_opcodes.txt\n", prefix.c_str());
+					}
+				}
+			}
+
 			if(FILE* bf = fopen((prefix + "_blocks.txt").c_str(), "w"))
 			{
 				fprintf(bf, "# pc words executions fetch_words\n");
@@ -416,6 +567,44 @@ int main(int argc, char* argv[])
 		printf("  external TOTAL              %12.1f / frame = %.2f M/s at %u Hz\n",
 			static_cast<double>(extAcc + fetchExt) / window,
 			static_cast<double>(extAcc + fetchExt) / window * sr / 1e6, sr);
+	}
+
+	// ---- peripherals (Phase 0 item 4) -------------------------------------
+	if(tracing && dsp56k::periphProfileActive())
+	{
+		const auto* pr = dsp56k::periphProfileReads();
+		const auto* pw = dsp56k::periphProfileWrites();
+		const auto* ps = dsp56k::periphProfileSites();
+		const auto* mr = dsp56k::periphProfileMarkReads();
+		const auto* mw = dsp56k::periphProfileMarkWrites();
+		const auto win = frames > 2048 ? frames - 2048 : frames;
+
+		printf("\n# peripheral registers touched (Phase 0 item 4)\n");
+		printf("  boot = accesses before the first note, i.e. one-time configuration.\n");
+		printf("  # %-5s %-9s %-10s %8s %8s %12s %12s %6s\n", "area", "addr", "name",
+			"boot rd", "boot wr", "reads/frame", "writes/frame", "sites");
+		uint32_t touched = 0;
+		for(uint32_t area = 0; area < 2; ++area)
+		{
+			for(uint32_t i = 0; i < 128; ++i)
+			{
+				const auto idx = area * 128 + i;
+				if(!pr[idx] && !pw[idx] && !ps[idx])
+					continue;
+				++touched;
+				const auto addr = 0xffff80 + i;
+				const auto it = periphNames.find(area * 0x1000000 + addr);
+				printf("  %-5s 0x%06x  %-10s %8llu %8llu %12.2f %12.2f %6u\n", area ? "Y" : "X", addr,
+					it == periphNames.end() ? "-" : it->second.c_str(),
+					static_cast<unsigned long long>(mr[idx]), static_cast<unsigned long long>(mw[idx]),
+					static_cast<double>(pr[idx] - mr[idx]) / win,
+					static_cast<double>(pw[idx] - mw[idx]) / win, ps[idx]);
+			}
+		}
+		printf("  %u of 256 peripheral registers touched; the other %u are dead and need not be built\n",
+			touched, 256 - touched);
+		printf("  NOTE: registers with sites but no reads are served by the readAsPtr fast path,\n"
+		       "        which reads host memory directly and cannot be counted at runtime\n");
 	}
 
 	// ---- page map ---------------------------------------------------------

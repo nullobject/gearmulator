@@ -50,6 +50,12 @@ public:
 	// when the trace window opens, which keeps firmware upload out of the numbers.
 	void enableFetchProfiling() { m_fetchProfile = true; }
 
+	// analysis helper: record which instruction sits at each P word, and every
+	// peripheral register access. Both are armed before boot for the same reason
+	// as fetch profiling, and both are reset when the trace window opens.
+	void enableOpcodeProfiling() { m_opcodeProfile = true; }
+	void enablePeriphProfiling() { m_periphProfile = true; }
+
 	// analysis helper: DSP cycles and instructions retired inside the trace window,
 	// so reconstructed fetch counts can be sanity-checked against them
 	uint64_t getWindowCycles() const { return m_windowCycles; }
@@ -66,6 +72,11 @@ public:
 	void setPreBootCallback(MemCallback _c) { m_preBoot = std::move(_c); }
 	void setPostBootCallback(MemCallback _c) { m_postBoot = std::move(_c); }
 	void setPostRunCallback(MemCallback _c) { m_postRun = std::move(_c); }
+
+	// analysis helper: reach the DSP itself before teardown, for anything that
+	// needs more than memory - peripheral symbol names, for instance
+	using DspCallback = std::function<void(dsp56k::DSP&)>;
+	void setPostRunDspCallback(DspCallback _c) { m_postRunDsp = std::move(_c); }
 
 	// analysis helper: record memory writes in [lo,hi) during sample window [start,end)
 	void setMemTraceWindow(uint32_t _lo, uint32_t _hi, uint32_t _start, uint32_t _end)
@@ -91,9 +102,12 @@ private:
 	bool m_memTraceEnabled = false;
 	bool m_fullMemTrace = false;
 	bool m_fetchProfile = false;
+	bool m_opcodeProfile = false;
+	bool m_periphProfile = false;
 	uint64_t m_windowCycles = 0, m_windowInstructions = 0;
 	std::vector<uint8_t> m_notes;
 	bool m_notesSet = false;
 	MemCallback m_preBoot, m_postBoot, m_postRun;
+	DspCallback m_postRunDsp;
 	uint32_t m_traceLo = 0, m_traceHi = 0, m_traceStart = 0, m_traceEnd = 0;
 };

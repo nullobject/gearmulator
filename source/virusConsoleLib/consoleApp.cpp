@@ -283,6 +283,12 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 	if(m_fetchProfile)
 		dsp56k::fetchProfileEnable(m_dsp1->getMemory().sizeP());
 
+	if(m_opcodeProfile)
+		dsp56k::opcodeProfileEnable(m_dsp1->getMemory().sizeP());
+
+	if(m_periphProfile)
+		dsp56k::periphProfileEnable();
+
 	if(m_fullMemTrace)
 	{
 		auto& jit = m_dsp1->getJIT();
@@ -341,6 +347,8 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 				dsp56k::memTraceBegin(m_traceLo, m_traceHi);
 				if(m_fetchProfile)
 					dsp56k::fetchProfileClear();
+				if(m_periphProfile)
+					dsp56k::periphProfileMark();	// everything so far was boot
 				m_windowCycles = m_dsp1->getDSP().getCycles();
 				m_windowInstructions = m_dsp1->getDSP().getInstructionCounter();
 				traceStarted = true;
@@ -360,6 +368,9 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 
 	if(m_postRun)
 		m_postRun(m_dsp1->getMemory());
+
+	if(m_postRunDsp)
+		m_postRunDsp(m_dsp1->getDSP());
 
 	if(!m_memDumpPrefix.empty())
 	{
