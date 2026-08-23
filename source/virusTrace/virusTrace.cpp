@@ -24,10 +24,16 @@
 #include <string>
 #include <vector>
 
+#include "virusTraceVersion.h"
+
 #include "virusConsoleLib/consoleApp.h"
 #include "dsp56kEmu/dsp.h"
 #include "dsp56kEmu/memory.h"
 #include "dsp56kEmu/memtrace.h"
+
+// Bump whenever the record layout or the header keys change. The reader refuses
+// a version it does not know rather than guessing at the fields.
+constexpr int TRACE_FORMAT_VERSION = 2;
 
 namespace
 {
@@ -183,13 +189,23 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	fprintf(g_out, "# virusTrace v1  rom=%s model=%d samplerate=%d startFrame=%u voices=%d\n",
-		app.getRom().getFilename().c_str(), static_cast<int>(app.getRom().getModel()),
-		app.getRom().getSamplerate(), startFrm, voices);
-	fprintf(g_out, "# I pc sr omr a56 b56 x48 y48 r0..r7 n0..n7 m0..m7 sp la sc sstop lc vba ep sz\n");
-	fprintf(g_out, "#   state is as it stood BEFORE the instruction at pc executes\n");
-	fprintf(g_out, "# W area addr value   - a memory write by the preceding I\n");
-	fprintf(g_out, "# memory as it stood at the first record is in <out>.mem\n");
+	// One "key: value" per line rather than key=value on one line, so a ROM path
+	// containing spaces cannot break the parse. The reader requires the version
+	// and refuses anything it does not understand: a trace is the only thing the
+	// core is validated against, so a silent misparse is the worst failure here.
+	fprintf(g_out, "# virusTrace %d\n", TRACE_FORMAT_VERSION);
+	fprintf(g_out, "# gearmulator: %s\n", VIRUSTRACE_GEARMULATOR_SHA);
+	fprintf(g_out, "# dsp56300: %s\n", VIRUSTRACE_DSP56300_SHA);
+	fprintf(g_out, "# rom: %s\n", app.getRom().getFilename().c_str());
+	fprintf(g_out, "# model: %d\n", static_cast<int>(app.getRom().getModel()));
+	fprintf(g_out, "# samplerate: %d\n", app.getRom().getSamplerate());
+	fprintf(g_out, "# start-frame: %u\n", startFrm);
+	fprintf(g_out, "# voices: %d\n", voices);
+	fprintf(g_out, "# memory: %s.mem\n", out.c_str());
+	fprintf(g_out, "# fields: pc sr omr a56 b56 x48 y48 r0..r7 n0..n7 m0..m7 sp la sc sstop lc vba ep sz\n");
+	fprintf(g_out, "#\n");
+	fprintf(g_out, "# I <fields>  - state as it stood BEFORE the instruction at pc executes\n");
+	fprintf(g_out, "# W area addr value  - a memory write by the preceding I\n");
 
 	g_memPrefix = out;
 	dsp56k::instTraceSetSink(&instSink);
@@ -209,5 +225,15 @@ int main(int argc, char* argv[])
 	fclose(g_out);
 
 	fprintf(stderr, "wrote %" PRIu64 " instructions to %s\n", g_count, out.c_str());
+
+	// the render length is derived from the instruction count by a rule of thumb,
+	// and a firmware that idles retires far fewer instructions per frame than one
+	// that does not - so say when the window closed early rather than silently
+	// handing back a shorter trace than was asked for
+	if(g_count < g_limit)
+		fprintf(stderr, "WARNING: asked for %" PRIu64 " but the window closed after %" PRIu64 ".\n"
+		                "         Raise startFrame's render budget by asking for more instructions,\n"
+		                "         or trace a busier part of the run.\n", g_limit, g_count);
+
 	return g_count ? 0 : 1;
 }
