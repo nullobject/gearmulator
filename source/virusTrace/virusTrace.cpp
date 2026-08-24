@@ -31,9 +31,12 @@
 #include "dsp56kEmu/memory.h"
 #include "dsp56kEmu/memtrace.h"
 
-// Bump whenever the record layout or the header keys change. The reader refuses
-// a version it does not know rather than guessing at the fields.
-constexpr int TRACE_FORMAT_VERSION = 2;
+// Bump whenever the record layout or the header keys change -- or, as for 3,
+// when a version turns out to have been recording an incomplete set of writes:
+// 48-bit L: stores went through a raw pointer that never reached the tracer, so
+// a version 2 trace replays wrongly past any of them. The reader refuses a
+// version it does not know rather than guessing at the fields.
+constexpr int TRACE_FORMAT_VERSION = 3;
 
 namespace
 {
