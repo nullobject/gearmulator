@@ -301,6 +301,24 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 	if(m_preBoot)
 		m_preBoot(m_dsp1->getMemory());
 
+	if(m_bootTrace)
+	{
+		// Same configuration the window arms, applied one step earlier. There are
+		// no blocks to destroy yet - that is the whole point of arming here - so
+		// every block the boot code compiles carries the per-instruction hook.
+		dsp56k::memTraceBegin(m_traceLo, m_traceHi);
+
+		dsp56k::instTraceArm(true);
+		auto& jit = m_dsp1->getJIT();
+		auto cfg = jit.getConfig();
+		cfg.maxInstructionsPerBlock = 1;
+		cfg.linkJitBlocks = false;
+		cfg.maxDoIterations = 1;
+		cfg.memoryWritesCallCpp = true;
+		cfg.memoryReadsCallCpp = true;
+		jit.setConfig(cfg);
+	}
+
 	bootDSP(_createDebugger);
 
 	if(m_postBoot)

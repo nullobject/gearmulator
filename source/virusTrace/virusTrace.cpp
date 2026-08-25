@@ -57,6 +57,24 @@ namespace
 			g_pendingWrites.push_back({_area, _addr, _value});
 	}
 
+	// Peripheral accesses, which the memory tracer cannot see: peripheral space
+	// never reaches Memory, so a MOVEP to X:$ffffff leaves no W record and a MOVEP
+	// from X:$ffffc6 shows up only as whatever register caught the value. A
+	// register block built elsewhere has to be graded against the accesses
+	// themselves, so they go to their own file beside the trace, stamped with the
+	// index of the instruction that made them.
+	FILE* g_periph = nullptr;
+
+	void periphSink(const uint8_t _area, const bool _write, const uint32_t _addr, const uint32_t _value, const uint32_t _pc)
+	{
+		if(!g_periph || g_done)
+			return;
+		// g_count has already been incremented for the instruction that is
+		// running, so it is one ahead of that instruction's index in the trace.
+		fprintf(g_periph, "%" PRIu64 " %c %s %06x %06x %06x\n",
+			g_count - 1, _write ? 'W' : 'R', _area ? "Y" : "X", _addr, _value & 0xffffff, _pc);
+	}
+
 	const char* areaName(const uint8_t _area)
 	{
 		switch(_area)
@@ -161,6 +179,8 @@ int main(int argc, char* argv[])
 			"  instructions  how many to record, default 100000\n"
 			"  startFrame    audio frame to open the window at, default 4096\n"
 			"                (note-on is at 2048, so the default is just after it)\n"
+			"                -1 traces the DSP's own boot instead: the bootstrap ROM,\n"
+			"                the HDI08 firmware upload, and the peripheral configuration\n"
 			"  voices        note-ons to hold during the window, default 1\n");
 		return 1;
 	}
@@ -168,7 +188,9 @@ int main(int argc, char* argv[])
 	const std::string rom   = argv[1];
 	const std::string out   = argc > 2 ? argv[2] : "/tmp/virus.trace";
 	g_limit                 = argc > 3 ? strtoull(argv[3], nullptr, 10) : 100000;
-	const uint32_t startFrm = argc > 4 ? static_cast<uint32_t>(atoi(argv[4])) : 4096;
+	const int      startArg = argc > 4 ? atoi(argv[4]) : 4096;
+	const bool     bootTrace = startArg < 0;
+	const uint32_t startFrm = bootTrace ? 0 : static_cast<uint32_t>(startArg);
 	const int voices        = argc > 5 ? atoi(argv[5]) : 1;
 
 	ConsoleApp app(rom, virusLib::DeviceModel::ABC);
@@ -202,7 +224,10 @@ int main(int argc, char* argv[])
 	fprintf(g_out, "# rom: %s\n", app.getRom().getFilename().c_str());
 	fprintf(g_out, "# model: %d\n", static_cast<int>(app.getRom().getModel()));
 	fprintf(g_out, "# samplerate: %d\n", app.getRom().getSamplerate());
-	fprintf(g_out, "# start-frame: %u\n", startFrm);
+	if(bootTrace)
+		fprintf(g_out, "# start-frame: boot\n");
+	else
+		fprintf(g_out, "# start-frame: %u\n", startFrm);
 	fprintf(g_out, "# voices: %d\n", voices);
 	fprintf(g_out, "# memory: %s.mem\n", out.c_str());
 	fprintf(g_out, "# fields: pc sr omr a56 b56 x48 y48 r0..r7 n0..n7 m0..m7 sp la sc sstop lc vba ep sz\n");
@@ -210,22 +235,45 @@ int main(int argc, char* argv[])
 	fprintf(g_out, "# I <fields>  - state as it stood BEFORE the instruction at pc executes\n");
 	fprintf(g_out, "# W area addr value  - a memory write by the preceding I\n");
 
+	g_periph = fopen((out + ".periph").c_str(), "w");
+	if(g_periph)
+	{
+		fprintf(g_periph, "# pathogen periph trace 1\n");
+		fprintf(g_periph, "# index kind area addr value pc\n");
+		fprintf(g_periph, "# index is the instruction the access belongs to, counting from the first traced one\n");
+		fprintf(g_periph, "# pc is the program counter as it stood during the access, which is past the instruction word\n");
+		dsp56k::periphTraceSetSink(&periphSink);
+	}
+
 	g_memPrefix = out;
 	dsp56k::instTraceSetSink(&instSink);
 	dsp56k::memTraceSetSink(&memSink);
-	app.enableInstTrace();
 	app.setMemTraceWindow(0, 0xffffffff, startFrm, 0xfffffff0);
+	if(bootTrace)
+		app.enableBootTrace();
+	else
+		app.enableInstTrace();
 
 	// the window has to stay open long enough to retire the requested count; one
 	// frame is ~2300 instructions, and lockstep mode is far slower than a normal
 	// render, so ask for a generous but bounded number of frames
 	const auto frames = startFrm + static_cast<uint32_t>(g_limit / 512) + 64;
 
-	fprintf(stderr, "tracing %" PRIu64 " instructions from frame %u...\n", g_limit, startFrm);
+	if(bootTrace)
+		fprintf(stderr, "tracing %" PRIu64 " instructions from DSP reset...\n", g_limit);
+	else
+		fprintf(stderr, "tracing %" PRIu64 " instructions from frame %u...\n", g_limit, startFrm);
 	app.run(out + ".wav", frames, 64, false, false);
 
 	flushWrites();
 	fclose(g_out);
+	if(g_periph)
+	{
+		dsp56k::periphTraceSetSink(nullptr);
+		fclose(g_periph);
+		g_periph = nullptr;
+		fprintf(stderr, "wrote peripheral accesses to %s.periph\n", out.c_str());
+	}
 
 	fprintf(stderr, "wrote %" PRIu64 " instructions to %s\n", g_count, out.c_str());
 

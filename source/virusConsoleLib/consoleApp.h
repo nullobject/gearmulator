@@ -60,6 +60,14 @@ public:
 	// block compiled so far so they are re-emitted with the per-instruction hook.
 	// Boot therefore still runs at full speed; only the traced window is slow.
 	void enableInstTrace() { m_instTrace = true; }
+
+	// analysis helper: arm the instruction trace before bootDSP() instead of at
+	// the render window, so the DSP's *own* boot is what gets recorded - the
+	// bootstrap ROM, the HDI08 firmware upload it pulls in, and the firmware's
+	// one-time peripheral configuration. Nothing else can grade that sequence:
+	// by the time the first audio block has been rendered it has already run.
+	// Boot is slow in lockstep mode, which is the price of recording it.
+	void enableBootTrace() { m_bootTrace = true; }
 	void enablePeriphProfiling() { m_periphProfile = true; }
 
 	// analysis helper: DSP cycles and instructions retired inside the trace window,
@@ -110,6 +118,7 @@ private:
 	bool m_fetchProfile = false;
 	bool m_opcodeProfile = false;
 	bool m_instTrace = false;
+	bool m_bootTrace = false;
 	bool m_periphProfile = false;
 	uint64_t m_windowCycles = 0, m_windowInstructions = 0;
 	std::vector<uint8_t> m_notes;
