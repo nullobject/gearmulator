@@ -71,8 +71,17 @@ namespace
 			return;
 		// g_count has already been incremented for the instruction that is
 		// running, so it is one ahead of that instruction's index in the trace.
-		fprintf(g_periph, "%" PRIu64 " %c %s %06x %06x %06x\n",
-			g_count - 1, _write ? 'W' : 'R', _area ? "Y" : "X", _addr, _value & 0xffffff, _pc);
+		//
+		// It is zero for every access made before the window opened, and those
+		// are not a curiosity: at the default startFrame the firmware has
+		// already booted, so the whole boot-time configuration a window
+		// inherits is in that group. Signed, they come out as -1, which is
+		// what a reader needs to tell "before this trace" from instruction 0.
+		// Unsigned it wrapped to 18446744073709551615, which sorts *after*
+		// every real index and put the entire inherited I/O page on the wrong
+		// side of every window. That is what format 2 fixes.
+		fprintf(g_periph, "%" PRId64 " %c %s %06x %06x %06x\n",
+			static_cast<int64_t>(g_count) - 1, _write ? 'W' : 'R', _area ? "Y" : "X", _addr, _value & 0xffffff, _pc);
 	}
 
 	const char* areaName(const uint8_t _area)
@@ -238,9 +247,10 @@ int main(int argc, char* argv[])
 	g_periph = fopen((out + ".periph").c_str(), "w");
 	if(g_periph)
 	{
-		fprintf(g_periph, "# pathogen periph trace 1\n");
+		fprintf(g_periph, "# pathogen periph trace 2\n");
 		fprintf(g_periph, "# index kind area addr value pc\n");
-		fprintf(g_periph, "# index is the instruction the access belongs to, counting from the first traced one\n");
+		fprintf(g_periph, "# index is the instruction the access belongs to, counting from the first traced one,\n");
+		fprintf(g_periph, "# or -1 for an access made before the window opened\n");
 		fprintf(g_periph, "# pc is the program counter as it stood during the access, which is past the instruction word\n");
 		dsp56k::periphTraceSetSink(&periphSink);
 	}
