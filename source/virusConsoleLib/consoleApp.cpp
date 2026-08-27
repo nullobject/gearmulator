@@ -316,6 +316,11 @@ void ConsoleApp::run(const std::string& _audioOutputFilename, uint32_t _maxSampl
 		cfg.maxDoIterations = 1;
 		cfg.memoryWritesCallCpp = true;
 		cfg.memoryReadsCallCpp = true;
+		// Dead-code elimination is what makes a per-instruction observer lie: a
+		// register writeback nothing later in the block reads is not dead when
+		// something is watching every instruction, and inside a REP the block is
+		// the whole loop. See nightcapaudio/pathogen#34.
+		cfg.enableOptimizer = false;
 		jit.setConfig(cfg);
 	}
 

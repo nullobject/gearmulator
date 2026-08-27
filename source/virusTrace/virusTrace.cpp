@@ -140,11 +140,24 @@ namespace
 		if(g_done)
 			return;
 
-		if(g_count == 0 && !g_memPrefix.empty())
-			dumpMemory(_dsp);
+		if(g_count == 0)
+		{
+			if(!g_memPrefix.empty())
+				dumpMemory(_dsp);
 
-		// writes issued by the *previous* instruction are only known now
-		flushWrites();
+			// Anything written before the first traced instruction was written by
+			// nobody the trace can name -- on an interpreter build that includes
+			// the bootstrap ROM being installed into P memory, which the JIT does
+			// outside any block and so never recorded. The snapshot above already
+			// holds the result, so these are dropped rather than attributed to an
+			// instruction that did not make them.
+			g_pendingWrites.clear();
+		}
+		else
+		{
+			// writes issued by the *previous* instruction are only known now
+			flushWrites();
+		}
 
 		if(g_count >= g_limit)
 		{
